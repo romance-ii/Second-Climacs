@@ -1,0 +1,78 @@
+\documentclass{acm_proc_article-sp}
+\usepackage[utf8]{inputenc}
+\usepackage{color}
+
+\def\inputfig#1{\input #1}
+\def\inputtex#1{\input #1}
+\def\inputal#1{\input #1}
+\def\inputcode#1{\input #1}
+
+\inputtex{logos.tex}
+\inputtex{refmacros.tex}
+\inputtex{other-macros.tex}
+
+\begin{document}
+\title{Incremental Parsing of Common Lisp Code}
+\numberofauthors{1}
+\author{\alignauthor
+Robert Strandh\\
+\affaddr{University of Bordeaux}\\
+\affaddr{351, Cours de la Libération}\\
+\affaddr{Talence, France}\\
+\email{robert.strandh@u-bordeaux.fr}}
+
+\toappear{Permission to make digital or hard copies of all or part of
+  this work for personal or classroom use is granted without fee
+  provided that copies are not made or distributed for profit or
+  commercial advantage and that copies bear this notice and the full
+  citation on the first page. Copyrights for components of this work
+  owned by others than the author(s) must be honored. Abstracting with
+  credit is permitted. To copy otherwise, or republish, to post on
+  servers or to redistribute to lists, requires prior specific
+  permission and/or a fee. Request permissions from
+  Permissions@acm.org.
+
+  ELS '17, April 3 -- 6 2017, Brussels, Belgium
+  Copyright is held by the owner/author(s). %Publication rights licensed to ACM.
+%  ACM 978-1-4503-2931-6/14/08\$15.00.
+%  http://dx.doi.org/10.1145/2635648.2635654
+}
+
+\maketitle
+
+\begin{abstract}
+In a text editor for writing \commonlisp{} source code, it is
+desirable to have an accurate analysis of the buffer contents, so that
+the role of the elements of the code can be indicated to the
+programmer.  Furthermore, the buffer contents should preferably be
+analyzed after each keystroke so that the programmer has up-to-date
+information resulting from the analysis.
+
+We describe an incremental parser that can be used as a key component
+of such an analyzer.  The parser uses a special-purpose implementation
+of the \commonlisp{} \texttt{read} function in combination of a
+\emph{cache} that stores existing results of calling the reader.
+
+Since the parser uses the standard \commonlisp{} reader, the resulting
+analysis is very accurate.  Furthermore, the cache makes the parser
+very fast in most common cases; re-parsing a buffer in which a single
+character has been altered takes only a few milliseconds.
+\end{abstract}
+
+\category{D.3.4}{Programming Languages}{Processors}
+[Code generation, Optimization, Run-time environments]
+
+\terms{Algorithms, Languages, Performance}
+
+\keywords{\commonlisp{}}
+
+\inputtex{sec-introduction.tex}
+\inputtex{sec-previous.tex}
+\inputtex{sec-our-method.tex}
+\inputtex{sec-performance.tex}
+\inputtex{sec-conclusions.tex}
+\inputtex{sec-acknowledgements.tex}
+
+\bibliographystyle{abbrv}
+\bibliography{incremental-parsing}
+\end{document}

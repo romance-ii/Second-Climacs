@@ -18,7 +18,7 @@
 
 (defmethod previous-position ((folio folio) line-number item-number)
   (if (zerop item-number)
-      (values 0 (line-length folio (1- line-number)))
+      (values (1- line-number) (line-length folio (1- line-number)))
       (values line-number (1- item-number))))
 
 (defgeneric eof-p (folio-stream))
@@ -76,9 +76,11 @@
 (defvar *stack*)
 
 (defun skip-whitespace (stream)
-  (loop for char = (read-char stream nil nil)
-	while (member char '(#\Space #\Tab #\Newline))
-	finally (unread-char char stream)))
+  (loop until (eof-p stream)
+	for char = (read-char stream nil nil)
+	do (unless (member char '(#\Space #\Tab #\Newline))
+	     (unread-char char stream)
+	     (loop-finish))))
 
 (defmethod sicl-reader:read-common :around
     ((input-stream folio-stream) eof-error-p eof-value)
@@ -87,14 +89,29 @@
   (let ((*stack* (cons '() *stack*))
 	(start-line (current-line-number input-stream))
 	(start-column (current-item-number input-stream)))
-    (let ((result (call-next-method)))
+    (let ((result
+	    (handler-case (call-next-method)
+	      (end-of-file ()
+		(push (make-instance 'eof-parse-result
+			:children (make-relative (nreverse (first *stack*))
+				                 start-line)
+			:start-line start-line
+			:start-column start-column
+			:height (- (current-line-number input-stream)
+				   start-line)
+			:end-column (current-item-number input-stream)
+			:relative-p nil)
+		      (second *stack*))
+		(error 'end-of-file :stream input-stream)))))
       (push (make-instance 'expression-parse-result
 	      :expression result
-	      :children (nreverse (first *stack*))
+	      :children (make-relative (nreverse (first *stack*)) start-line)
 	      :start-line start-line
 	      :start-column start-column
-	      :end-line (current-line-number input-stream)
-	      :end-column (current-item-number input-stream))
+	      :height (- (current-line-number input-stream)
+		         start-line)
+	      :end-column (current-item-number input-stream)
+	      :relative-p nil)
 	    (second *stack*))
       result)))
 
@@ -102,13 +119,28 @@
     (function (input-stream folio-stream) char)
   (let ((start-line (current-line-number input-stream))
 	(start-column (current-item-number input-stream)))
-    (let ((result (multiple-value-list (call-next-method))))
+    (let ((result 
+	    (handler-case (multiple-value-list (call-next-method))
+	      (end-of-file ()
+		(push (make-instance 'eof-parse-result
+			:children (make-relative (nreverse (first *stack*))
+				                 start-line)
+			:start-line start-line
+			:start-column start-column
+			:height (- (current-line-number input-stream)
+				   start-line)
+			:end-column (current-item-number input-stream)
+			:relative-p nil)
+		      (second *stack*))
+		(error 'end-of-file :stream input-stream)))))
       (when (null result)
 	(push (make-instance 'no-expression-parse-result
-		:children (nreverse (first *stack*))
+		:children (make-relative (nreverse (first *stack*)) start-line)
 		:start-line start-line
 		:start-column start-column
-		:end-line (current-line-number input-stream)
-		:end-column (current-item-number input-stream))
+		:height (- (current-line-number input-stream)
+			   start-line)
+		:end-column (current-item-number input-stream)
+		:relative-p nil)
 	      (second *stack*)))
       (apply #'values result))))

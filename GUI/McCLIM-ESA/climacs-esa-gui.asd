@@ -1,9 +1,9 @@
 (cl:in-package #:asdf-user)
 
 (defsystem :climacs-esa-gui
-  :depends-on (:esa-mcclim
+  :depends-on (mcclim
 	       :climacs-view
-	       :climacs-buffer
+	       :cluffer
 	       :climacs-syntax-fundamental
 	       :climacs-show-fundamental
 	       :climacs-commands

@@ -11,74 +11,42 @@
   ((%cluffer-line :initarg :cluffer-line :reader cluffer-line)
    (%contents :initarg :contents :accessor contents)))
 
-(defclass analyzer ()
+(defclass analyzer (flexichain-folio)
   ((%prefix :initform '() :accessor prefix)
    (%suffix :initform '() :accessor suffix)
    (%residue :initform '() :accessor residue)
    (%worklist :initform '() :accessor worklist)
    ;; This slot contains the buffer that is being analyzed.
    (%buffer :initarg :buffer :accessor buffer)
-   ;; This slot contains a flexichain of the lines in the buffer.  A
-   ;; line is represented by an instance of the LINE class defined
-   ;; above.
-   (%lines :initform (make-instance 'flexichain:standard-flexichain)
-	   :reader lines)
    ;; The time stamp passed to and returned by the Cluffer update
    ;; protocol.
    (%time-stamp :initform nil :accessor time-stamp)
    ;; This slot contains the counter that is maintained during the
    ;; execution of the update function.
-   (%line-count :initform 0 :accessor line-count)
-   ;; This slot is set to TRUE as soon as the first modification,
-   ;; insertion, or deletion is encountered during the execution of
-   ;; the update function.
-   (%update-p :initform nil :accessor update-p)))
+   (%line-counter :initform 0 :accessor line-counter)))
+
+(defun pop-from-suffix (analyzer)
+  (with-accessors ((suffix suffix)) analyzer
+    (assert (not (null suffix)))
+    (let ((result (pop suffix)))
+      (unless (null suffix)
+	(relative-to-absolute (first suffix) (start-line result)))
+      result)))
+
+(defun push-to-suffix (analyzer parse-result)
+  (assert (not (relative-p parse-result)))
+  (with-accessors ((suffix suffix))
+      analyzer
+    (unless (null suffix)
+      (absolute-to-relative (first suffix) (start-line parse-result)))
+    (push parse-result suffix)))
 
 (defun suffix-to-prefix (analyzer)
-  (with-accessors ((prefix prefix)
-		   (suffix suffix))
-      analyzer
-    (assert (not (null suffix)))
-    (let* ((first-cons-cell suffix)
-	   (first-parse-result (first first-cons-cell)))
-      (setf suffix (rest suffix))
-      (unless (null suffix)
-	;; Convert start-line of new first element of suffix
-	;; to absolute line number by adding the absolute line
-	;; number of the element we are removing.
-	(incf (start-line (first suffix))
-	      (start-line first-parse-result)))
-      ;; Reuse the CONS cell rather than allocating a new one.
-      (setf (rest first-cons-cell) prefix)
-      (setf prefix first-cons-cell))))
+  (push (pop-from-suffix analyzer) (prefix analyzer)))
 
 (defun prefix-to-suffix (analyzer)
-  (with-accessors ((prefix prefix)
-		   (suffix suffix))
-      analyzer
-    (assert (not (null prefix)))
-    (let* ((first-cons-cell prefix)
-	   (first-parse-result (first first-cons-cell)))
-      (setf prefix (rest prefix))
-      (unless (null suffix)
-	;; Convert start-line of current first element of suffix to
-	;; relative line number by subtracting the absolute line
-	;; number of the element we are adding.
-	(decf (start-line (first suffix))
-	      (start-line first-parse-result)))
-      ;; Reuse the CONS cell rather than allocating a new one.
-      (setf (rest first-cons-cell) suffix)
-      (setf suffix first-cons-cell))))
-
-;;; Take a list of parse results with a relative position, and turn
-;;; each parse result in the list into one with an absolution position
-;;; according to the value of BASE.
-(defun make-absolute (relative-parse-results base)
-  (loop with offset = base
-	for rest on relative-parse-results
-	for relative-start = (start-line (first rest))
-	do (setf offset (+ offset relative-start))
-	   (setf (start-line (first rest)) offset)))
+  (assert (not (null (prefix analyzer))))
+  (push-to-suffix analyzer (pop (prefix analyzer))))
 
 (defun move-to-residue (analyzer)
   (push (pop (worklist analyzer))
@@ -88,48 +56,35 @@
   (loop until (null (worklist analyzer))
 	do (move-to-residue analyzer))
   (setf (residue analyzer)
-	(nreverse (residue analyzer)))
-  (setf (update-p analyzer) nil))
-
-(defun pop-from-suffix (analyzer)
-  (with-accessors ((suffix suffix)) analyzer
-    (assert (not (null suffix)))
-    (let ((result (pop suffix)))
-      (unless (null suffix)
-	(incf (start-line (first suffix))
-	      (start-line result)))
-      result)))
+	(nreverse (residue analyzer))))
 
 ;;; This function is called by the three operations that handle
 ;;; modifications.  The first time this function is called, we must
 ;;; position the prefix and the suffix according to the number of
 ;;; lines initially skipped.
 (defun ensure-update-initialized (analyzer)
-  (unless (update-p analyzer)
-    (setf (update-p analyzer) t)
-    ;; As long as there are parse results on the prefix that
-    ;; completely succeed the number of skipped lines, move them to
-    ;; the suffix.
-    (loop while (and (not (null (prefix analyzer)))
-		     (>= (start-line (first (prefix analyzer)))
-			 (line-count analyzer)))
-	  do (prefix-to-suffix analyzer))
-    ;; As long as there are parse results on the suffix that do not
-    ;; completely succeed the number of skipped lines, move them to
-    ;; the prefix.
-    (loop while (and (not (null (suffix analyzer)))
-		     (< (start-line (first (suffix analyzer)))
-			(line-count analyzer)))
-	  do (suffix-to-prefix analyzer))))
+  ;; As long as there are parse results on the prefix that do not
+  ;; completely precede the number of skipped lines, move them to the
+  ;; suffix.
+  (loop while (and (not (null (prefix analyzer)))
+		   (>= (end-line (first (prefix analyzer)))
+		       (line-counter analyzer)))
+	do (prefix-to-suffix analyzer))
+  ;; As long as there are parse results on the suffix that completely
+  ;; precede the number of skipped lines, move them to the prefix.
+  (loop while (and (not (null (suffix analyzer)))
+		   (< (end-line (first (suffix analyzer)))
+		      (line-counter analyzer)))
+	do (suffix-to-prefix analyzer)))
 
 ;;; Return true if and only if either there are no more parse results,
 ;;; or the first parse result starts at a line that is strictly
 ;;; greater than LINE-NUMBER.
 (defun next-parse-result-is-beyond-line-p (analyzer line-number)
   (with-accessors ((suffix suffix) (worklist worklist)) analyzer
-    (or (and (null worklist)
-	     (or (null suffix)
-		 (> (start-line (first suffix)) line-number)))
+    (if (null worklist)
+	(or (null suffix)
+	    (> (start-line (first suffix)) line-number))
 	(> (start-line (first worklist)) line-number))))
 
 ;;; Return true if and only if LINE-NUMBER is one of the lines of
@@ -138,7 +93,7 @@
 (defun line-is-inside-parse-result-p (parse-result line-number)
   (<= (start-line parse-result)
       line-number
-      (+ (start-line parse-result) (end-line parse-result))))
+      (+ (start-line parse-result) (height parse-result))))
 
 ;;; Add INCREMENT to the absolute line number of every parse result on
 ;;; the worklist, and of the first parse result of the suffix, if any.
@@ -157,14 +112,20 @@
       (push (pop-from-suffix analyzer)
 	    worklist))))
 
+;;; When this function is called, there is at least one parse result,
+;;; either on the work list or on the suffix that must be processed,
+;;; i.e., that parse result either entirely precedes LINE-NUMBER (so
+;;; that it should be moved to the residue), or it straddles the line
+;;; with that line number, so that it must be taken apart.
 (defun process-next-parse-result (analyzer line-number)
-  (ensure-worklist-not-empty analyzer)
-  (let ((parse-result (pop (worklist analyzer))))
-    (if (line-is-inside-parse-result-p parse-result line-number)
-	(let ((children (children parse-result)))
-	  (make-absolute children (start-line parse-result))
-	  (setf worklist (append children worklist)))
-	(push parse-result (residue analyzer)))))
+  (with-accessors ((worklist worklist)) analyzer
+    (ensure-worklist-not-empty analyzer)
+    (let ((parse-result (pop worklist)))
+      (if (line-is-inside-parse-result-p parse-result line-number)
+	  (let ((children (children parse-result)))
+	    (make-absolute children (start-line parse-result))
+	    (setf worklist (append children worklist)))
+	  (push parse-result (residue analyzer))))))
 
 (defun handle-modified-line (analyzer line-number)
   (loop until (next-parse-result-is-beyond-line-p analyzer line-number)
@@ -180,32 +141,54 @@
 	do (process-next-parse-result analyzer line-number))
   (adjust-worklist-and-suffix analyzer -1))
 
-(defun update (analyzer)
-  (with-accessors ((lines lines)
-		   (line-count line-count))
-      analyzer
-    (flet ((remove-deleted-lines (line)
-	     (loop for analyzer-line = (flexichain:element* lines line-count)
-		   for cluffer-line = (cluffer-line analyzer-line)
-		   until (eq line cluffer-line)
-		   do (flexichain:delete* lines line-count)
-		      (handle-deleted-line analyzer line-count))))
-      (flet ((skip (count)
-	       (incf line-count count))
-	     (modify (line)
-	       (remove-deleted-lines line)
-	       (handle-modified-line analyzer line-count)
-	       (incf line-count))
-	     (create (line)
-	       (let ((temp (make-instance 'line
-			     :cluffer-line line
-			     :contents (cluffer:items line))))
-		 (flexichain:insert* lines line-count temp))
-	       (handle-inserted-line analyzer line-count)
-	       (incf line-count))
-	     (sync (line)
-	       (remove-deleted-lines line)
-	       (incf line-count)))
-	(cluffer:update (buffer analyzer)
-			(time-stamp analyzer)
-			#'sync #'skip #'modify #'create)))))
+;;; Take into account modifications to the buffer by destroying the
+;;; parts of the cache that are no longer valid, while keeping parse
+;;; results that are not affected by such modifications.
+(defun scavenge (analyzer)
+  (let ((analyzer-initialized-p nil))
+    (with-accessors ((lines contents)
+		     (line-counter line-counter))
+	analyzer
+      (setf line-counter 0)
+      (flet ((remove-deleted-lines (line)
+	       (loop for analyzer-line = (flexichain:element* lines line-counter)
+		     for cluffer-line = (cluffer-line analyzer-line)
+		     until (eq line cluffer-line)
+		     do (flexichain:delete* lines line-counter)
+			(handle-deleted-line analyzer line-counter)))
+	     (ensure-analyzer-initialized ()
+	       (unless analyzer-initialized-p
+		 (setf analyzer-initialized-p t)
+		 (ensure-update-initialized analyzer))))
+	(flet ((skip (count)
+		 (incf line-counter count))
+	       (modify (line)
+		 (ensure-analyzer-initialized)
+		 (remove-deleted-lines line)
+		 (handle-modified-line analyzer line-counter)
+		 (incf line-counter))
+	       (create (line)
+		 (ensure-analyzer-initialized)
+		 (let ((temp (make-instance 'line
+			       :cluffer-line line
+			       :contents (cluffer:items line))))
+		   (flexichain:insert* lines line-counter temp))
+		 (handle-inserted-line analyzer line-counter)
+		 (incf line-counter))
+	       (sync (line)
+		 (remove-deleted-lines line)
+		 (incf line-counter)))
+	  (setf (time-stamp analyzer)
+		(cluffer:update (buffer analyzer)
+				(time-stamp analyzer)
+				#'sync #'skip #'modify #'create)))))))
+
+;;; Methods that make an instance of ANALYZER behave like an instance
+;;; of FOLIO.
+
+(defmethod line-length ((folio analyzer) line-number)
+  (length (contents (flexichain:element* (contents folio) line-number))))
+
+(defmethod item ((folio analyzer) line-number item-number)
+  (aref (contents (flexichain:element* (contents folio) line-number))
+	item-number))
