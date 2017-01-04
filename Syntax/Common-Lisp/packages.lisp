@@ -8,4 +8,6 @@
    #:line-length
    #:item
    #:folio-stream
-   #:synchronize))
+   #:synchronize
+   #:common-lisp-view
+   #:set-common-lisp-mode))

@@ -11,13 +11,11 @@
   ((%cluffer-line :initarg :cluffer-line :reader cluffer-line)
    (%contents :initarg :contents :accessor contents)))
 
-(defclass analyzer (flexichain-folio)
+(defclass analyzer (flexichain-folio climacs2-base:analyzer)
   ((%prefix :initform '() :accessor prefix)
    (%suffix :initform '() :accessor suffix)
    (%residue :initform '() :accessor residue)
    (%worklist :initform '() :accessor worklist)
-   ;; This slot contains the buffer that is being analyzed.
-   (%buffer :initarg :buffer :accessor buffer)
    ;; The time stamp passed to and returned by the Cluffer update
    ;; protocol.
    (%time-stamp :initform nil :accessor time-stamp)
@@ -179,7 +177,7 @@
 		 (remove-deleted-lines line)
 		 (incf line-counter)))
 	  (setf (time-stamp analyzer)
-		(cluffer:update (buffer analyzer)
+		(cluffer:update (climacs2-base:buffer analyzer)
 				(time-stamp analyzer)
 				#'sync #'skip #'modify #'create)))))))
 

@@ -17,4 +17,6 @@
    (:file "additional-conditions")
    (:file "analyzer-stream")
    (:file "parse")
-   (:file "read-forms")))
+   (:file "read-forms")
+   (:file "view")
+   (:file "set-mode")))

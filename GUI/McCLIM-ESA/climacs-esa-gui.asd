@@ -1,15 +1,22 @@
 (cl:in-package #:asdf-user)
 
 (defsystem :climacs-esa-gui
-  :depends-on (mcclim
-	       :climacs-view
+  :depends-on (:mcclim
 	       :cluffer
-	       :climacs-syntax-fundamental
-	       :climacs-show-fundamental
-	       :climacs-commands
-	       :climacs-basic-emacs)
+	       :second-climacs-base
+	       :climacs-flexichain-output-history
+	       :climacs-syntax-common-lisp
+	       :clouseau)
   :serial t
   :components
   ((:file "packages")
+   (:file "climacs-clim-view")
    (:file "text-pane")
-   (:file "gui")))
+   (:file "fundamental-view")
+   (:file "insert-table")
+   (:file "motion-table")
+   (:file "global-command-table")
+   (:file "fundamental-command-table")
+   (:file "view-names")
+   (:file "gui")
+   (:file "io")))

@@ -1,1 +1,483 @@
 \section{Our technique}
+
+\subsection{Buffer update protocol}
+
+Our incremental parser parses the contents of a line-oriented buffer,
+specified in the form of a \clos{} protocol
+\cite{Strandh:2016:CPE:3005729.3005732}.  The buffer is line-oriented
+in two different ways:
+
+\begin{enumerate}
+\item The editing operations specified by the protocol define a
+  \emph{line} abstraction, in contrast to a buffer of GNU Emacs
+  \cite{Finseth:1980:TPTa} which exposes a single sequence containing
+  newline characters to indicate line separation.
+\item The update protocol works on the granularity of a line.  An
+  entire line can be reported as being modified, inserted, or
+  deleted.
+\end{enumerate}
+
+For the purpose of this paper, the update protocol is the part of the
+buffer protocol that we are interested in, because we re-parse the
+buffer as a result of the update protocol having been invoked.
+
+In order to parse the buffer contents, we use a custom \texttt{read}
+function.  This version of the \texttt{read} function differs from the
+standard one in the following ways:
+
+\begin{itemize}
+\item Instead of returning S-expressions, it returns a nested
+  structure of instances of a standard class named
+  \texttt{parse-result}.  These instances contain the corresponding
+  S-expression and the start and end position (line, column) in the
+  buffer of the parse result.
+\item The parse results returned by the reader also include entities
+  that would normally not be returned by \texttt{read} such as
+  comments and (more generally), results of applying reader macros
+  that return no values.
+\item Instead of attempting to call \texttt{intern} in order to turn a
+  token into a symbol, the custom reader returns an instance of a
+  standard class named \texttt{token}.
+\end{itemize}
+
+The reader from the \sicl{} project%
+\footnote{See: https://github.com/robert-strandh/SICL.}  was slightly
+modified to allow this kind of customization, thereby avoiding the
+necessity of maintaining the code for a completely separate reader.
+
+The buffer update protocol is typically invoked after each keystroke
+by the end user, and the modifications to the buffer are typically
+very modest, in that usually a single line has been modified.  It
+would be wasteful, and too slow for large buffers, to re-parse the
+entire buffer character by character, each time the update protocol is
+invoked.  For that reason, we keep a \emph{cache} of parse results
+returned by the customized reader.
+
+\subsection{Cache organization}
+
+This cache is organized as a sequence%
+\footnote{Here, we use the word \emph{sequence} in the meaning of a
+  set of items organized consecutively, and not in the more
+  restrictive meaning defined by the \commonlisp{} standard.}  of
+top-level parse results.  Each top-level parse result contains the
+parse results returned by nested calls to the reader.  The sequence of
+top-level parse results is split into a \emph{prefix} and a
+\emph{suffix}, typically reflecting the current position in the buffer
+being edited by the end user.  The suffix contains parse results in
+the order they appear in the buffer, whereas the prefix contains parse
+results in reverse order, making it easy to move parse results between
+the prefix and the suffix.
+
+Depending on the location of the parse result in the cache data
+structure, its position may be \emph{absolute} or \emph{relative}.
+The prefix contains parse results that precede updates to the buffer.
+For that reason, these parse results have absolute positions.  Parse
+results in the suffix, on the other hand, follow updates to the
+buffer.  In particular, if a line is inserted or deleted, the parse
+results in the suffix will have their positions changed.  For that
+reason, only the first parse result of the suffix has an absolute
+position.  Each of the others has a position relative to its
+predecessor.  When a line is inserted or deleted, only the first parse
+result of the suffix has to have its position updated.  When a parse
+result is moved from the prefix to the suffix, or from the suffix to
+the prefix, the positions concerned are updated to maintain this
+invariant.
+
+To avoid having to traverse all the descendants of a parse result when
+its position changes, we make the position of the first child of some
+parse result $P$ relative to that of $P$, and the children, other than
+the first, of some parse result $P$, have positions relative to the
+previous child in the list.
+
+When the buffer is updated, we try to maintain as many parse results
+as possible in the cache.  We can think of a buffer update as
+resulting in a sequence of operations, sorted by lines in increasing
+order.  There can be three different update operations:
+
+\begin{itemize}
+\item Modify.  The line has been modified.
+\item Insert.  A new line has been inserted.
+\item Delete.  An existing line has been deleted.
+\end{itemize}
+
+Updating the cache according to a particular sequence of update
+operations consists of two distinct phases:
+
+\begin{enumerate}
+\item Invalidation of parse results that span a line that has been
+  modified, inserted, or deleted.
+\item Rehabilitation of the cache according to the updated buffer
+  contents.
+\end{enumerate}
+
+\subsection{Invalidation phase}
+
+\subsubsection{Description}
+
+During the invalidation phase, two additional lists of parse results
+are maintained, called the \emph{worklist} and the \emph{residue}.  At
+the beginning of this phase, these lists are both empty.  At the end
+of this phase, any remaining parse results on the worklist are moved
+to the residue, resulting in the worklist being empty.  During the
+execution of this phase, the residue contains the parse results in
+reverse order.  Only at the end of the phase is it reversed so that
+the parse results are then in the same order as they appear in the
+buffer.
+
+At the beginning of the invalidation phase, parse results are moved
+between the prefix and the suffix so that the last parse result of the
+prefix entirely precedes the first update operation, and the first
+parse result of the suffix does not.
+
+The invalidation phase consists of an \emph{outer} loop and an
+\emph{inner} loop.  In the outer loop, each update operation is
+processed in increasing order of the line of the operation.  The
+invalidation phase terminates when every update operations has been
+processes.  The inner loop is executed until one of the following
+conditions are met:
+
+\begin{enumerate}
+\item Both the worklist and the suffix are empty.
+\item The worklist is non-empty, and the position of first parse
+  result on the worklist is beyond the line of the update operation
+  being processed.
+\item The worklist is empty, the suffix is non-empty, and the position
+  of first parse result in the suffix is beyond the line of the update
+  operation being processed.
+\end{enumerate}
+
+In each iteration of the inner loop of the invalidation phase a single
+parse result is processed, namely the first parse result on the
+worklist.  If the worklist is empty, the first parse result of the
+suffix is moved to the worklist before processing begins.
+
+In each iteration of the inner loop of the invalidation phase, there
+are two possible cases:
+
+\begin{enumerate}
+\item The parse result to be processed entirely precedes the line of
+  the update operation being processed.  In this case, the parse
+  result is moved to the residue.
+\item The parse result spans the line of the update operation.  Then
+  the parse result is removed from the worklist, and its children (if
+  any) are pushed on the worklist, preserving their order.
+\end{enumerate}
+
+\subsubsection{Example}
+
+To illustrate the invalidation phase, consider the following buffer
+contents:
+
+{\small\begin{verbatim}
+    ...
+    34 (f 10)
+    35
+    36 (let ((x 1)
+    37       (y 2))
+    38   (g (h x)
+    39      (i y)
+    40      (j x y)))
+    41
+    42 (f 20)
+    ...
+\end{verbatim}}
+
+Each line is preceded by the absolute line number.  If the parse
+result starting at line 36 is a member of the prefix or if it is the
+first element of the suffix, it would be represented like this:
+
+{\small\begin{verbatim}
+    36 04 (let ((x 1) (y 2)) (g (h x) (i y) (j x y)))
+       00 01 ((x 1) (y 2))
+          00 00 (x 1)
+          01 00 (y 2)
+       02 02 (g (h x) (i y) (j x y))
+          00 00 (h x)
+          01 00 (i y)
+          02 00 (j x y)
+\end{verbatim}}
+
+Since column numbers are uninteresting for our illustration, we
+show only line numbers.  Furthermore, we present a list as a table for
+a more compact presentation.
+
+Suppose, for example, that the buffer contents in our example was
+modified so that line 37 was altered in some way, and a line was
+inserted between the lines 39 and 40.  As a result of this update, we
+need to represent the following parse results:
+
+{\small\begin{verbatim}
+    ...
+    34 (f 10)
+    35
+    36       (x 1)
+    37
+    38      (h x)
+    39      (i y)
+    40
+    41      (j x y)
+    42
+    43 (f 20)
+    ...
+\end{verbatim}}
+
+In other words, we need to obtain the following representation:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    36 00 (x 1)
+    38 00 (h x)
+    39 00 (i y)
+    41 00 (j x y)
+    suffix
+    43 00 (f 20)
+    ...
+\end{verbatim}}
+
+Line 37 has been altered, so our first task is to adjust the prefix
+and the suffix so that the prefix contains the last parse result that
+is unaffected by the modifications.  This adjustment results in the
+following situation:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    worklist
+    suffix
+    36 04 (let ((x 1) (y 2)) (g (h x) (i y) (j x y)))
+    06 00 (f 20)
+    ...
+\end{verbatim}}
+
+The first parse result of the suffix is affected by the fact that line
+37 has been modified.  We must move the children of that parse result
+to the worklist.  In doing so, we make the \texttt{start-line} of the
+children reflect the absolute line number, and we also make the
+\texttt{start-line} of the next parse result of the suffix also
+reflect the absolute line number.  We obtain the following situation:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    worklist
+    36 01 ((x 1) (y 2))
+    38 02 (g (h x) (i y) (j x y))
+    suffix
+    42 00 (f 20)
+    ...
+\end{verbatim}}
+
+The first element of the worklist is affected by the modification of
+line 37.  We therefore remove it from the worklist, and add its
+children to the top of the worklist.  In doing so, we make the
+\texttt{start-line} of those children reflect absolute line numbers.
+We obtain the following situation:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    worklist
+    36 00 (x 1)
+    37 00 (y 2)
+    38 02 (g (h x) (i y) (j x y))
+    suffix
+    42 00 (f 20)
+    ...
+\end{verbatim}}
+
+The first element of the worklist is unaffected by the modification,
+because it precedes the modified line entirely.  We therefore move it
+to the residue list.  We now have the following situation:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    36 00 (x 1)
+    worklist
+    37 00 (y 2)
+    38 02 (g (h x) (i y) (j x y))
+    suffix
+    42 00 (f 20)
+    ...
+\end{verbatim}}
+
+The first parse result of the top of the worklist is affected by the
+modification.  It has no children, so we pop it off the worklist.
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    36 00 (x 1)
+    worklist
+    38 02 (g (h x) (i y) (j x y))
+    suffix
+    42 00 (f 20)
+    ...
+\end{verbatim}}
+
+The modification of line 37 is now entirely processed.  We know this
+because the first parse result on the worklist occurs beyond the
+modified line in the buffer.  We therefore start processing the line
+inserted between the existing lines 39 and 40.  The first item on the
+worklist is affected by this insertion.  We therefore remove it from
+the worklist and push its children instead.  In doing so, we make the
+\texttt{start-line} slot those children reflect the absolute line
+number.  We obtain the following result:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    36 00 (x 1)
+    worklist
+    38 00 (h x)
+    39 00 (i y)
+    40 00 (j x y)
+    suffix
+    42 00 (f 20)
+    ...
+\end{verbatim}}
+
+The first element of the worklist is unaffected by the insertion
+because it precedes the inserted line entirely.  We therefore move it
+to the residue list.  We now have the following situation:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    36 00 (x 1)
+    38 00 (h x)
+    worklist
+    39 00 (i y)
+    40 00 (j x y)
+    suffix
+    42 00 (f 20)
+    ...
+\end{verbatim}}
+
+Once again, the first element of the worklist is unaffected by the
+insertion because it precedes the inserted line entirely.  We
+therefore move it to the residue list.  We now have the following
+situation:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    36 00 (x 1)
+    38 00 (h x)
+    39 00 (i y)
+    worklist
+    40 00 (j x y)
+    suffix
+    42 00 (f 20)
+    ...
+\end{verbatim}}
+
+The first element of the worklist is affected by the insertion, in
+that it must have its line number incremented.  In fact, every element
+of the worklist and also the first element of the suffix must have
+their line numbers incremented.  Furthermore, this update finishes the
+processing of the inserted line.  We now have the following situation:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    36 00 (x 1)
+    38 00 (h x)
+    39 00 (i y)
+    worklist
+    41 00 (j x y)
+    suffix
+    43 00 (f 20)
+    ...
+\end{verbatim}}
+
+With no more buffer modifications to process, we terminate the
+procedure by moving remaining parse results from the worklist to the
+residue list.  The final situation is shown here:
+
+{\small\begin{verbatim}
+    prefix
+    ...
+    34 00 (f 10)
+    residue
+    36 00 (x 1)
+    38 00 (h x)
+    39 00 (i y)
+    41 00 (j x y)
+    worklist
+    suffix
+    43 00 (f 20)
+    ...
+\end{verbatim}}
+
+\subsection{Rehabilitation phase}
+
+Once the cache has been partially invalidated according to
+modifications to the buffer, the buffer must be parsed again so that a
+complete valid cache is again obtained.  To avoid having to parse the
+entire buffer from beginning to end, we use two crucial ways to speed
+up the process:
+
+\begin{enumerate}
+\item We do not have to take into account the buffer contents that
+  corresponds to the parse results in the prefix of the cache.
+  Because of the way the prefix and the suffix were positioned prior
+  to the invalidation phase, the parse results in the prefix all
+  precede the first modified line of the buffer, so these parse
+  results are still valid.
+\item When a call to \texttt{read} is made at a particular position in
+  the buffer, we first consult the cache.  If the cache contains a
+  parse result that was obtained from a previous call to \texttt{read}
+  at this position, the entire invocation of the reader is
+  short-circuited, so that the existing parse result is returned
+  instead, and the stream position is advanced to be positioned at the
+  end of that existing parse result.
+\end{enumerate}
+
+In order to accomplish the second speedup, we define a new kind of
+input stream, using the proposal%
+\footnote{See:
+  http://www.nhplace.com/kent/CL/Issues/stream-definition-by-user.html
+  for a description of the proposal by David Gray.  The proposal did
+  not make it into the \commonlisp{} standard, but most modern
+  implementations support it.}
+ by David Gray for allowing user-defined stream classes in
+ \commonlisp{}.  By using such a ``Gray stream'', we avoid having to
+ modify the reader while still allowing it to consult the cache before
+ starting the normal character-by-character reading process.
+
+Our custom stream uses the \emph{residue} and the \emph{suffix} lists
+to guide the reading process.  The reader is invoked repeatedly until
+one of the following situations occur:
+
+\begin{enumerate}
+\item The residue and the suffix are both empty.  The prefix then
+  contains every valid top-level parse result of the buffer.
+\item The residue is empty and the current invocation of the reader
+  occurs at the position of the first parse result of the suffix.
+  This situation indicates that repeated invocations of the reader
+  would return the exact parse results of the suffix.  We can
+  therefore stop, knowing that the prefix and the suffix together
+  contain every valid top-level parse result of the buffer.
+\end{enumerate}
